@@ -1,0 +1,4 @@
+# Terminal UI framework
+textual==0.47.1
+
+# Development dependencies (install with: pip install -r requirements-dev.txt)
