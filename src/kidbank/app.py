@@ -1,5 +1,6 @@
 """Main application class for Kidbank."""
 
+from typing import Dict
 from textual.app import App, ComposeResult
 from textual.screen import Screen
 from textual.containers import Container, Vertical, Horizontal, VerticalScroll
@@ -9,6 +10,7 @@ from textual.binding import Binding
 from .database import Database
 from .accounts import AccountManager
 from .currency import get_currency, get_available_currencies
+from .printer import Printer, PrinterError
 
 
 class MainMenuScreen(Screen):
@@ -77,6 +79,7 @@ class AccountDetailScreen(Screen):
         ("escape", "back", "Back"),
         ("d", "deposit", "Deposit"),
         ("w", "withdraw", "Withdraw"),
+        ("p", "print_statement", "Print Statement"),
     ]
 
     def __init__(self, account_manager: AccountManager, account_number: str):
@@ -92,7 +95,7 @@ class AccountDetailScreen(Screen):
             Static("═" * 60, id="divider"),
             Static("RECENT TRANSACTIONS:", id="transactions_header"),
             ListView(id="transaction_list"),
-            Static("\n[D] Deposit  [W] Withdraw  [ESC] Back", id="detail_help"),
+            Static("\n[D] Deposit  [W] Withdraw  [P] Print Statement  [ESC] Back", id="detail_help"),
         )
         yield Footer()
 
@@ -151,8 +154,61 @@ class AccountDetailScreen(Screen):
             callback=self.refresh_details
         )
 
+    def action_print_statement(self) -> None:
+        """Print account statement."""
+        account = self.account_manager.get_account(self.account_number)
+        if not account:
+            return
+
+        transactions = self.account_manager.get_transactions(self.account_number, limit=20)
+
+        try:
+            Printer.print_statement(account, transactions)
+            # Show success message
+            self.app.push_screen(MessageScreen("Statement sent to printer successfully!"))
+        except PrinterError as e:
+            # Show error message
+            self.app.push_screen(MessageScreen(f"Print failed: {str(e)}", is_error=True))
+
     def action_back(self) -> None:
         """Return to main menu."""
+        self.dismiss(None)
+
+
+class MessageScreen(Screen):
+    """Simple screen to display a message."""
+
+    BINDINGS = [
+        ("escape", "back", "Close"),
+        ("enter", "back", "Close"),
+    ]
+
+    def __init__(self, message: str, is_error: bool = False):
+        super().__init__()
+        self.message = message
+        self.is_error = is_error
+
+    def compose(self) -> ComposeResult:
+        """Create child widgets."""
+        title = "ERROR" if self.is_error else "SUCCESS"
+        yield Header()
+        yield Container(
+            Static(title, id="title"),
+            Static("═" * 60, id="divider"),
+            Static(self.message, id="message_content"),
+            Static(""),
+            Button("Close", id="btn_close", variant="primary"),
+            Static("\n[ENTER] or [ESC] to close", id="message_help"),
+        )
+        yield Footer()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle close button."""
+        if event.button.id == "btn_close":
+            self.dismiss(None)
+
+    def action_back(self) -> None:
+        """Close the message screen."""
         self.dismiss(None)
 
 
@@ -272,6 +328,77 @@ class CreateAccountScreen(Screen):
         self.dismiss(None)
 
 
+class TransactionConfirmationScreen(Screen):
+    """Screen shown after successful transaction with print option."""
+
+    BINDINGS = [
+        ("escape", "back", "Continue"),
+        ("enter", "back", "Continue"),
+    ]
+
+    def __init__(self, account_manager: AccountManager, account_number: str,
+                 transaction: Dict, transaction_id: int):
+        super().__init__()
+        self.account_manager = account_manager
+        self.account_number = account_number
+        self.transaction = transaction
+        self.transaction_id = transaction_id
+
+    def compose(self) -> ComposeResult:
+        """Create child widgets."""
+        account = self.account_manager.get_account(self.account_number)
+        currency = get_currency(account["currency"])
+
+        txn_type = self.transaction["transaction_type"].upper()
+        amount = currency.format_amount(self.transaction["amount"])
+        new_balance = currency.format_amount(self.transaction["new_balance"])
+
+        yield Header()
+        yield Container(
+            Static("TRANSACTION SUCCESSFUL", id="title"),
+            Static("═" * 60, id="divider"),
+            Static(f"\n{txn_type}: {amount}", id="transaction_summary"),
+            Static(f"New Balance: {new_balance}\n", id="balance_info"),
+            Horizontal(
+                Button("Print Receipt", id="btn_print", variant="success"),
+                Button("Continue", id="btn_continue", variant="primary"),
+                id="confirmation_buttons",
+            ),
+            Static("\n[ENTER] or [ESC] to continue without printing", id="confirmation_help"),
+            Static(id="print_error"),
+        )
+        yield Footer()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses."""
+        if event.button.id == "btn_print":
+            self.print_receipt()
+        elif event.button.id == "btn_continue":
+            self.dismiss(None)
+
+    def print_receipt(self) -> None:
+        """Print the transaction receipt."""
+        account = self.account_manager.get_account(self.account_number)
+        if not account:
+            return
+
+        try:
+            Printer.print_receipt(account, self.transaction, self.transaction_id)
+            # Show success and close after a moment
+            error_widget = self.query_one("#print_error", Static)
+            error_widget.update("Receipt sent to printer!")
+            # Auto-close after showing message
+            self.set_timer(1.5, lambda: self.dismiss(None))
+        except PrinterError as e:
+            # Show error message
+            error_widget = self.query_one("#print_error", Static)
+            error_widget.update(f"Print failed: {str(e)}")
+
+    def action_back(self) -> None:
+        """Continue without printing."""
+        self.dismiss(None)
+
+
 class TransactionScreen(Screen):
     """Screen for making deposits or withdrawals."""
 
@@ -343,7 +470,17 @@ class TransactionScreen(Screen):
             else:
                 result = self.account_manager.withdraw(self.account_number, amount, description)
 
-            self.dismiss(result)
+            # Show confirmation screen with print option
+            transaction_id = result.get("transaction_id")
+            self.app.push_screen(
+                TransactionConfirmationScreen(
+                    self.account_manager,
+                    self.account_number,
+                    result,
+                    transaction_id
+                ),
+                callback=lambda _: self.dismiss(result)
+            )
 
         except ValueError as e:
             error_widget.update(f"Error: {str(e)}")
@@ -382,9 +519,23 @@ class KidbankApp(App):
         margin: 1;
     }
 
-    #menu_help, #detail_help, #create_help, #transaction_help {
+    #menu_help, #detail_help, #create_help, #transaction_help, #message_help, #confirmation_help {
         color: $text-muted;
         padding: 1;
+    }
+
+    #message_content, #transaction_summary, #balance_info {
+        padding: 1 2;
+    }
+
+    #confirmation_buttons {
+        padding: 1;
+        height: auto;
+    }
+
+    #print_error {
+        color: $success;
+        padding: 1 2;
     }
 
     #form_container {

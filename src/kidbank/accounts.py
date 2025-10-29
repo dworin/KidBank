@@ -225,13 +225,16 @@ class AccountManager:
             VALUES (?, ?, ?, ?, ?)
         """, (account["id"], "deposit", amount, new_balance, description or "Deposit"))
 
+        transaction_id = cursor.lastrowid
         conn.commit()
 
         return {
             "account_number": account_number,
             "transaction_type": "deposit",
             "amount": amount,
-            "new_balance": new_balance
+            "new_balance": new_balance,
+            "description": description or "Deposit",
+            "transaction_id": transaction_id
         }
 
     def withdraw(self, account_number: str, amount: float, description: str = "") -> dict:
@@ -274,11 +277,14 @@ class AccountManager:
             VALUES (?, ?, ?, ?, ?)
         """, (account["id"], "withdrawal", amount, new_balance, description or "Withdrawal"))
 
+        transaction_id = cursor.lastrowid
         conn.commit()
 
         return {
             "account_number": account_number,
             "transaction_type": "withdrawal",
             "amount": amount,
-            "new_balance": new_balance
+            "new_balance": new_balance,
+            "description": description or "Withdrawal",
+            "transaction_id": transaction_id
         }
