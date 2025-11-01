@@ -79,7 +79,10 @@ class AccountDetailScreen(Screen):
         ("escape", "back", "Back"),
         ("d", "deposit", "Deposit"),
         ("w", "withdraw", "Withdraw"),
+        ("v", "view_statement", "View Statement"),
+        ("V", "view_detailed_statement", "View Detailed Statement"),
         ("p", "print_statement", "Print Statement"),
+        ("P", "print_detailed_statement", "Print Detailed Statement"),
     ]
 
     def __init__(self, account_manager: AccountManager, account_number: str):
@@ -95,7 +98,7 @@ class AccountDetailScreen(Screen):
             Static("═" * 60, id="divider"),
             Static("RECENT TRANSACTIONS:", id="transactions_header"),
             ListView(id="transaction_list"),
-            Static("\n[D] Deposit  [W] Withdraw  [P] Print Statement  [ESC] Back", id="detail_help"),
+            Static("\n[D] Deposit  [W] Withdraw  [V] View  [Shift+V] Detailed  [P] Print  [Shift+P] Print Detailed  [ESC] Back", id="detail_help"),
         )
         yield Footer()
 
@@ -170,6 +173,42 @@ class AccountDetailScreen(Screen):
             # Show error message
             self.app.push_screen(MessageScreen(f"Print failed: {str(e)}", is_error=True))
 
+    def action_print_detailed_statement(self) -> None:
+        """Print detailed account statement with transaction notes."""
+        account = self.account_manager.get_account(self.account_number)
+        if not account:
+            return
+
+        transactions = self.account_manager.get_transactions(self.account_number, limit=20)
+
+        try:
+            Printer.print_detailed_statement(account, transactions)
+            # Show success message
+            self.app.push_screen(MessageScreen("Detailed statement sent to printer successfully!"))
+        except PrinterError as e:
+            # Show error message
+            self.app.push_screen(MessageScreen(f"Print failed: {str(e)}", is_error=True))
+
+    def action_view_statement(self) -> None:
+        """View account statement on screen."""
+        account = self.account_manager.get_account(self.account_number)
+        if not account:
+            return
+
+        transactions = self.account_manager.get_transactions(self.account_number, limit=20)
+        content = Printer.format_statement(account, transactions)
+        self.app.push_screen(StatementViewScreen(content, "ACCOUNT STATEMENT"))
+
+    def action_view_detailed_statement(self) -> None:
+        """View detailed account statement on screen."""
+        account = self.account_manager.get_account(self.account_number)
+        if not account:
+            return
+
+        transactions = self.account_manager.get_transactions(self.account_number, limit=20)
+        content = Printer.format_detailed_statement(account, transactions)
+        self.app.push_screen(StatementViewScreen(content, "DETAILED ACCOUNT STATEMENT"))
+
     def action_back(self) -> None:
         """Return to main menu."""
         self.dismiss(None)
@@ -209,6 +248,35 @@ class MessageScreen(Screen):
 
     def action_back(self) -> None:
         """Close the message screen."""
+        self.dismiss(None)
+
+
+class StatementViewScreen(Screen):
+    """Screen for viewing formatted statements on screen."""
+
+    BINDINGS = [
+        ("escape", "back", "Close"),
+        ("enter", "back", "Close"),
+    ]
+
+    def __init__(self, content: str, title: str = "STATEMENT"):
+        super().__init__()
+        self.content = content
+        self.title = title
+
+    def compose(self) -> ComposeResult:
+        """Create child widgets."""
+        yield Header()
+        yield VerticalScroll(
+            Static(self.title, id="title"),
+            Static("═" * 60, id="divider"),
+            Static(self.content, id="statement_content"),
+            Static("\n[ENTER] or [ESC] to close", id="statement_help"),
+        )
+        yield Footer()
+
+    def action_back(self) -> None:
+        """Close the statement view."""
         self.dismiss(None)
 
 
@@ -519,9 +587,14 @@ class KidbankApp(App):
         margin: 1;
     }
 
-    #menu_help, #detail_help, #create_help, #transaction_help, #message_help, #confirmation_help {
+    #menu_help, #detail_help, #create_help, #transaction_help, #message_help, #confirmation_help, #statement_help {
         color: $text-muted;
         padding: 1;
+    }
+
+    #statement_content {
+        padding: 1 2;
+        white-space: pre;
     }
 
     #message_content, #transaction_summary, #balance_info {
