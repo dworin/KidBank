@@ -594,7 +594,6 @@ class KidbankApp(App):
 
     #statement_content {
         padding: 1 2;
-        white-space: pre;
     }
 
     #message_content, #transaction_summary, #balance_info {
